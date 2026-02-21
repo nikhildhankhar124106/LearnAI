@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+youtube-transcript-api
+PyPDF2
+numpy
+scikit-learn
+groq
+langchain-text-splitters
+python-dotenv
+pydantic
