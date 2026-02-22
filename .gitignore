@@ -12,6 +12,7 @@ backend/.env
 
 # Sensitive cookies
 backend/cookies.txt
+backend/cookies_b64_value.txt
 
 # ChromaDB data
 backend/chroma_data/

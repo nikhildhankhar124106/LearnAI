@@ -25,24 +25,48 @@ def extract_video_id(url: str) -> str:
 def _build_api() -> YouTubeTranscriptApi:
     """Build a YouTubeTranscriptApi instance, using cookies if available.
 
-    On cloud platforms YouTube often blocks requests from datacenter IPs.
-    Providing a cookies.txt file (Netscape/Mozilla format) exported from
-    a browser session lets the library authenticate as a real user.
+    Cookies are tried in this order:
+    1. YOUTUBE_COOKIES env var (base64-encoded cookies.txt content) — for cloud
+    2. backend/cookies.txt file — for local development
+    3. No cookies (plain API) — fallback
 
-    Place the file at  backend/cookies.txt  to enable this.
+    On cloud platforms YouTube often blocks requests from datacenter IPs.
+    Providing cookies lets the library authenticate as a real user.
     """
+    import requests as req_lib
+    import base64
+    import tempfile
+
+    # Method 1: env var (base64-encoded cookies.txt content)
+    cookies_b64 = os.getenv("YOUTUBE_COOKIES", "")
+    if cookies_b64:
+        try:
+            raw = base64.b64decode(cookies_b64)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="wb")
+            tmp.write(raw)
+            tmp.close()
+            cookie_jar = MozillaCookieJar(tmp.name)
+            cookie_jar.load(ignore_discard=True, ignore_expires=True)
+            session = req_lib.Session()
+            session.cookies = cookie_jar  # type: ignore[assignment]
+            os.unlink(tmp.name)
+            return YouTubeTranscriptApi(http_client=session)
+        except Exception:
+            pass
+
+    # Method 2: local file
     cookie_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt")
     if os.path.isfile(cookie_path):
         try:
-            import requests
             cookie_jar = MozillaCookieJar(cookie_path)
             cookie_jar.load(ignore_discard=True, ignore_expires=True)
-            session = requests.Session()
+            session = req_lib.Session()
             session.cookies = cookie_jar  # type: ignore[assignment]
             return YouTubeTranscriptApi(http_client=session)
         except Exception:
-            # If cookie loading fails, fall back to default
             pass
+
+    # Method 3: no cookies
     return YouTubeTranscriptApi()
 
 
