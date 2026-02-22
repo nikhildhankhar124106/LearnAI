@@ -1,4 +1,4 @@
-"""YouTube transcript extraction service — Version-compatible for 0.6.2."""
+"""YouTube transcript extraction service — Advanced Compatibility & Browser Headers."""
 
 import re
 import os
@@ -6,6 +6,7 @@ import base64
 import tempfile
 import logging
 import requests
+import youtube_transcript_api
 from http.cookiejar import MozillaCookieJar
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -62,7 +63,11 @@ def get_cookie_status() -> dict:
         os.path.dirname(os.path.dirname(__file__)), "cookies.txt"
     )
 
+    # Get library version
+    yt_lib_version = getattr(youtube_transcript_api, "__version__", "unknown")
+
     status = {
+        "yt_lib_version": yt_lib_version,
         "env_var_set": bool(env_var),
         "env_var_length": len(env_var) if env_var else 0,
         "local_file_exists": os.path.isfile(local_path),
@@ -103,17 +108,34 @@ def extract_video_id(url: str) -> str:
 
 
 def get_transcript(url: str) -> dict:
-    """Fetch YouTube transcript using instance-based methods for compatibility.
+    """Fetch YouTube transcript using instance-based methods & browser headers.
     
     Compatible with youtube-transcript-api v0.6.2 and above.
+    Uses realistic headers to avoid blocking on cloud platforms.
     """
     video_id = extract_video_id(url)
     cookie_path = _ensure_cookie_file()
     
     logger.info("Fetching transcript for %s (cookies=%s)", video_id, bool(cookie_path))
 
-    # Manual session management for cookies
+    # 1. Create session with realistic browser headers
     session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://www.youtube.com',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+    })
+
+    # 2. Load cookies into session
     if cookie_path:
         try:
             jar = MozillaCookieJar(cookie_path)
@@ -123,14 +145,14 @@ def get_transcript(url: str) -> dict:
         except Exception as e:
             logger.error("Failed to load cookies into session: %s", str(e))
 
-    # Instantiate API with custom session
+    # 3. Instantiate API with custom session
     api = YouTubeTranscriptApi(http_client=session)
     
     transcript_data = None
     last_error = None
 
     try:
-        # Using instance.list(video_id) instead of static list_transcripts
+        # Using instance.list(video_id) for compatibility
         transcript_list = api.list(video_id)
         
         # Preference: Manual English -> Generated English -> First available
@@ -157,7 +179,7 @@ def get_transcript(url: str) -> dict:
             f"Error: {str(last_error)}. "
             f"Diagnostic: env_var={cookie_status['env_var_set']}, "
             f"tmp_file={cookie_status['tmp_file_exists']}, "
-            f"local_file={cookie_status['local_file_exists']}."
+            f"lib_version={cookie_status['yt_lib_version']}."
         )
         raise RuntimeError(error_msg)
 
