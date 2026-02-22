@@ -2,8 +2,88 @@
 
 import re
 import os
+import base64
+import tempfile
 from http.cookiejar import MozillaCookieJar
 from youtube_transcript_api import YouTubeTranscriptApi
+
+
+# ── Module-level cookie temp file path (kept alive for the process lifetime) ──
+_cookie_tmp_path: str | None = None
+
+
+def _ensure_cookie_file() -> str | None:
+    """Write YOUTUBE_COOKIES env var (base64) to a temp file once.
+
+    Returns the path to the temp cookie file, or None if the env var is not set.
+    The file is written once per process and reused across requests.
+    """
+    global _cookie_tmp_path
+
+    if _cookie_tmp_path and os.path.isfile(_cookie_tmp_path):
+        return _cookie_tmp_path
+
+    cookies_b64 = os.getenv("YOUTUBE_COOKIES", "")
+    if not cookies_b64:
+        return None
+
+    try:
+        raw = base64.b64decode(cookies_b64)
+        # /tmp is writable on Vercel serverless
+        tmp_path = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+        with open(tmp_path, "wb") as f:
+            f.write(raw)
+        _cookie_tmp_path = tmp_path
+        return _cookie_tmp_path
+    except Exception:
+        return None
+
+
+def _load_cookie_jar(path: str) -> MozillaCookieJar | None:
+    """Load a Netscape/Mozilla cookie file into a MozillaCookieJar."""
+    try:
+        jar = MozillaCookieJar(path)
+        jar.load(ignore_discard=True, ignore_expires=True)
+        return jar
+    except Exception:
+        return None
+
+
+def _build_api() -> YouTubeTranscriptApi:
+    """Build a YouTubeTranscriptApi instance, using cookies if available.
+
+    Cookies are tried in this order:
+    1. YOUTUBE_COOKIES env var (base64-encoded cookies.txt content) — for cloud
+    2. backend/cookies.txt file — for local development
+    3. No cookies (plain API) — fallback
+
+    On cloud platforms YouTube often blocks requests from datacenter IPs.
+    Providing cookies lets the library authenticate as a real user.
+    """
+    import requests as req_lib
+
+    # ── Method 1: env var (base64-encoded cookies.txt content) ──────────────
+    env_cookie_path = _ensure_cookie_file()
+    if env_cookie_path:
+        jar = _load_cookie_jar(env_cookie_path)
+        if jar:
+            session = req_lib.Session()
+            session.cookies = jar  # type: ignore[assignment]
+            return YouTubeTranscriptApi(http_client=session)
+
+    # ── Method 2: local cookies.txt file ───────────────────────────────────
+    local_cookie_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "cookies.txt"
+    )
+    if os.path.isfile(local_cookie_path):
+        jar = _load_cookie_jar(local_cookie_path)
+        if jar:
+            session = req_lib.Session()
+            session.cookies = jar  # type: ignore[assignment]
+            return YouTubeTranscriptApi(http_client=session)
+
+    # ── Method 3: no cookies ──────────────────────────────────────────────
+    return YouTubeTranscriptApi()
 
 
 def extract_video_id(url: str) -> str:
@@ -20,54 +100,6 @@ def extract_video_id(url: str) -> str:
         if match:
             return match.group(1)
     raise ValueError(f"Could not extract video ID from URL: {url}")
-
-
-def _build_api() -> YouTubeTranscriptApi:
-    """Build a YouTubeTranscriptApi instance, using cookies if available.
-
-    Cookies are tried in this order:
-    1. YOUTUBE_COOKIES env var (base64-encoded cookies.txt content) — for cloud
-    2. backend/cookies.txt file — for local development
-    3. No cookies (plain API) — fallback
-
-    On cloud platforms YouTube often blocks requests from datacenter IPs.
-    Providing cookies lets the library authenticate as a real user.
-    """
-    import requests as req_lib
-    import base64
-    import tempfile
-
-    # Method 1: env var (base64-encoded cookies.txt content)
-    cookies_b64 = os.getenv("YOUTUBE_COOKIES", "")
-    if cookies_b64:
-        try:
-            raw = base64.b64decode(cookies_b64)
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="wb")
-            tmp.write(raw)
-            tmp.close()
-            cookie_jar = MozillaCookieJar(tmp.name)
-            cookie_jar.load(ignore_discard=True, ignore_expires=True)
-            session = req_lib.Session()
-            session.cookies = cookie_jar  # type: ignore[assignment]
-            os.unlink(tmp.name)
-            return YouTubeTranscriptApi(http_client=session)
-        except Exception:
-            pass
-
-    # Method 2: local file
-    cookie_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt")
-    if os.path.isfile(cookie_path):
-        try:
-            cookie_jar = MozillaCookieJar(cookie_path)
-            cookie_jar.load(ignore_discard=True, ignore_expires=True)
-            session = req_lib.Session()
-            session.cookies = cookie_jar  # type: ignore[assignment]
-            return YouTubeTranscriptApi(http_client=session)
-        except Exception:
-            pass
-
-    # Method 3: no cookies
-    return YouTubeTranscriptApi()
 
 
 def get_transcript(url: str) -> dict:
@@ -99,9 +131,12 @@ def get_transcript(url: str) -> dict:
         try:
             transcript_list = ytt_api.list(video_id)
             if transcript_list:
-                # Get the first available transcript
                 first_available = transcript_list[0]
-                lang_code = first_available.language_code if hasattr(first_available, 'language_code') else 'en'
+                lang_code = (
+                    first_available.language_code
+                    if hasattr(first_available, "language_code")
+                    else "en"
+                )
                 transcript = ytt_api.fetch(video_id, languages=[lang_code])
         except Exception:
             pass
@@ -115,11 +150,15 @@ def get_transcript(url: str) -> dict:
         )
 
     # Extract text from transcript segments
-    segments = transcript.snippets if hasattr(transcript, 'snippets') else transcript
+    segments = transcript.snippets if hasattr(transcript, "snippets") else transcript
     texts = []
     count = 0
     for segment in segments:
-        text = segment.text if hasattr(segment, 'text') else (segment.get("text", "") if isinstance(segment, dict) else "")
+        text = (
+            segment.text
+            if hasattr(segment, "text")
+            else (segment.get("text", "") if isinstance(segment, dict) else "")
+        )
         if text:
             texts.append(text)
             count += 1
