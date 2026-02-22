@@ -1,10 +1,12 @@
-"""YouTube transcript extraction service."""
+"""YouTube transcript extraction service — Version-compatible for 0.6.2."""
 
 import re
 import os
 import base64
 import tempfile
 import logging
+import requests
+from http.cookiejar import MozillaCookieJar
 from youtube_transcript_api import YouTubeTranscriptApi
 
 logger = logging.getLogger(__name__)
@@ -70,7 +72,6 @@ def get_cookie_status() -> dict:
         "tmp_dir_writable": os.access(tempfile.gettempdir(), os.W_OK),
     }
 
-
     if env_var:
         try:
             raw = base64.b64decode(env_var)
@@ -102,37 +103,47 @@ def extract_video_id(url: str) -> str:
 
 
 def get_transcript(url: str) -> dict:
-    """Fetch YouTube transcript using the most robust method.
-
-    Tries fetching via the official list_transcripts API with cookie file support.
+    """Fetch YouTube transcript using instance-based methods for compatibility.
+    
+    Compatible with youtube-transcript-api v0.6.2 and above.
     """
     video_id = extract_video_id(url)
     cookie_path = _ensure_cookie_file()
     
     logger.info("Fetching transcript for %s (cookies=%s)", video_id, bool(cookie_path))
 
+    # Manual session management for cookies
+    session = requests.Session()
+    if cookie_path:
+        try:
+            jar = MozillaCookieJar(cookie_path)
+            jar.load(ignore_discard=True, ignore_expires=True)
+            session.cookies = jar
+            logger.info("Loaded cookies into session from %s", cookie_path)
+        except Exception as e:
+            logger.error("Failed to load cookies into session: %s", str(e))
+
+    # Instantiate API with custom session
+    api = YouTubeTranscriptApi(http_client=session)
+    
     transcript_data = None
     last_error = None
 
     try:
-        # Step 1: Get the transcript list
-        # This is more robust than direct 'fetch' because we can inspect available languages
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, cookies=cookie_path)
+        # Using instance.list(video_id) instead of static list_transcripts
+        transcript_list = api.list(video_id)
         
-        # Step 2: Try finding a transcript
         # Preference: Manual English -> Generated English -> First available
         try:
             transcript = transcript_list.find_transcript(['en'])
         except Exception:
             try:
-                # Fallback to any language
-                # We can't use find_transcript([]) as it requires at least one lang
-                # So we just take the first one available
+                # Fallback to any language (first available)
                 transcript = next(iter(transcript_list))
             except Exception as e:
                 raise RuntimeError(f"No transcripts available for this video: {str(e)}")
 
-        # Step 3: Fetch the actual data
+        # Fetch the actual data
         transcript_data = transcript.fetch()
         
     except Exception as e:
