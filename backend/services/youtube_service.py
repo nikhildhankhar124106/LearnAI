@@ -184,12 +184,22 @@ def get_transcript(url: str) -> dict:
         raise RuntimeError(error_msg)
 
     # Process segments
-    texts = [segment.get("text", "") for segment in transcript_data if "text" in segment]
+    texts = []
+    for segment in transcript_data:
+        if isinstance(segment, dict):
+            text = segment.get("text", "")
+        else:
+            # Handle object based segments like FetchedTranscriptSnippet
+            text = getattr(segment, "text", "")
+        if text:
+            texts.append(text)
+            
     transcript_text = " ".join(texts)
     transcript_text = re.sub(r"\s+", " ", transcript_text).strip()
 
     if not transcript_text:
         raise RuntimeError(f"Transcript for video {video_id} is empty.")
+
 
     return {
         "video_id": video_id,
