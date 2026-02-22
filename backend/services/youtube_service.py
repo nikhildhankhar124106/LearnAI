@@ -1,6 +1,8 @@
 """YouTube transcript extraction service."""
 
 import re
+import os
+from http.cookiejar import MozillaCookieJar
 from youtube_transcript_api import YouTubeTranscriptApi
 
 
@@ -20,6 +22,30 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Could not extract video ID from URL: {url}")
 
 
+def _build_api() -> YouTubeTranscriptApi:
+    """Build a YouTubeTranscriptApi instance, using cookies if available.
+
+    On cloud platforms YouTube often blocks requests from datacenter IPs.
+    Providing a cookies.txt file (Netscape/Mozilla format) exported from
+    a browser session lets the library authenticate as a real user.
+
+    Place the file at  backend/cookies.txt  to enable this.
+    """
+    cookie_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt")
+    if os.path.isfile(cookie_path):
+        try:
+            import requests
+            cookie_jar = MozillaCookieJar(cookie_path)
+            cookie_jar.load(ignore_discard=True, ignore_expires=True)
+            session = requests.Session()
+            session.cookies = cookie_jar  # type: ignore[assignment]
+            return YouTubeTranscriptApi(http_client=session)
+        except Exception:
+            # If cookie loading fails, fall back to default
+            pass
+    return YouTubeTranscriptApi()
+
+
 def get_transcript(url: str) -> dict:
     """Fetch YouTube transcript and return structured result.
 
@@ -30,7 +56,7 @@ def get_transcript(url: str) -> dict:
     """
     video_id = extract_video_id(url)
 
-    ytt_api = YouTubeTranscriptApi()
+    ytt_api = _build_api()
 
     # Try fetching transcript - first English, then any available language
     transcript = None
@@ -59,7 +85,9 @@ def get_transcript(url: str) -> dict:
     if transcript is None:
         raise RuntimeError(
             f"No transcripts found for video {video_id}. "
-            f"The video may not have subtitles/captions enabled."
+            f"The video may not have subtitles/captions enabled. "
+            f"If you are running on a cloud server, YouTube may be blocking requests — "
+            f"try adding a cookies.txt file to the backend/ directory."
         )
 
     # Extract text from transcript segments
