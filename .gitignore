@@ -10,6 +10,9 @@ venv/
 .env.local
 backend/.env
 
+# Sensitive cookies
+backend/cookies.txt
+
 # ChromaDB data
 backend/chroma_data/
 
