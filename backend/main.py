@@ -4,11 +4,17 @@ Provides endpoints for processing YouTube videos and PDFs,
 generating flashcards and quizzes, and RAG-based chat.
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import FRONTEND_URL
 from routes import process, generate, chat
+from services.youtube_service import get_cookie_status
+
+# ── Logging ───────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
 
 # ── App Setup ─────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -59,3 +65,11 @@ async def root():
             "POST /chat",
         ],
     }
+
+
+# ── Debug (remove after confirming cookies work) ─────────────────────────
+@app.get("/debug/cookies")
+async def debug_cookies():
+    """Check cookie configuration — remove this endpoint after debugging."""
+    return get_cookie_status()
+
